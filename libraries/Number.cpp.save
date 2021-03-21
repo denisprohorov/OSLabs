@@ -1,7 +1,9 @@
 #include <iostream>
-#include "Number.h"
+e "Number.h"
 #include <string>
 
+Number one(1);
+Number zero(0);
 
 Number::Number(int value) : value(value){}
 

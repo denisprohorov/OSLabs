@@ -1,0 +1,9 @@
+gcc -c Number.cpp -o Number.o
+ar rcs Number.a Number.o
+gcc -c Vector.cpp -o Vector.o
+ar rcs Vector.a Vector.o
+g++ -g -fPIC -Wall -Werror -Wextra -pedantic Vector.cpp Number.a -shared -o Vector.so
+gcc -c lab1.cpp -o lab1.o
+g++ -o lab1 lab1.o -L Number.a Vector.so
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:. 
+./lab1

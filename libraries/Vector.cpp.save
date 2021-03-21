@@ -1,6 +1,6 @@
+
 #include "Vector.h"
 #include "Number.h"
-#include <climits>
 #define M_PI 3.14159265358979323846
 
 Vector::Vector(int x, int y) : x(x), y(y){}
@@ -35,7 +35,7 @@ Number Vector::fi()
 			return num - createNumber(M_PI);
 		}
 	}
-	return Number(0);
+	return zero;
 }
 Vector Vector::operator+(Vector& v){
 	return Vector(this->x + v.x, this->y + v.y);
