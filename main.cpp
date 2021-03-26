@@ -13,11 +13,13 @@ void send() {
 //        bufferedChannel.Send(i++);
 }
 void pop() {
-    while(!isFinish || true){
-        std::cout << bufferedChannel.Recv().first << "\n";
+    bool rez = true;
+    while(rez){
+        std::pair<int, bool> result = bufferedChannel.Recv();
+        std::cout << result.first << "\n";
+        rez = result.second;
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
-    std::cout << bufferedChannel.Recv().first << "\n";
 }
 
 int main() {
