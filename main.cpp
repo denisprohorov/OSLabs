@@ -5,7 +5,7 @@
 #include <queue>
 #include <mutex>
 
-const int COUNT_THREADS = 4;
+int COUNT_THREADS;
 
 struct Block{
     int** matrix;
@@ -280,11 +280,11 @@ void printMatrix(int** A, int n, int m){
 
 
 int main(){
-//    freopen("cmake-build-debug/input.txt", "r", stdin);
-    freopen("input.txt", "r", stdin);
+    freopen("cmake-build-debug/input.txt", "r", stdin);
+//    freopen("input.txt", "r", stdin);
     srand(time(0));
     int n, k, m;
-    std::cin >> n >> k >> m;
+    std::cin >> COUNT_THREADS >> n >> k >> m;
     int** A = createMatrix(n, k);
     fillMatrix(A, n, k);
     int** B = createMatrix(k, m);
