@@ -4,9 +4,8 @@
 #include <windows.h>
 #include <queue>
 #include <mutex>
-#include <condition_variable>
 
-const int COUNT_THREADS = 4;
+int COUNT_THREADS;
 
 struct Block{
     int** matrix;
@@ -56,12 +55,13 @@ public:
     }
 
     std::pair<MulData*, bool> Recv() {
-        /*if(mutex != NULL)*/ WaitForSingleObject(mutex, INFINITE);
+        WaitForSingleObject(mutex, INFINITE);
         if(!this->isOpen || queue.empty()){
             this->Close();
             std::pair<MulData*, bool> pair;
             pair.first = NULL;
             pair.second = false;
+            ReleaseMutex(mutex);
             return pair;
         }
         //queue is not empty
@@ -91,7 +91,7 @@ int getRand(){
     return rand() % size - size / 2;
 }
 
-void deleteMatrix(int** matrix, int n){
+void deleteMatrix(void** matrix, int n){
     for (int i = 0; i < n; ++i) {
         delete[] matrix[i];
     }
@@ -156,7 +156,7 @@ DWORD threadProc(LPVOID lpParam){
         int** C = mul((LPVOID) data);
         //write block result
         data->writeFncPtr(data, C);
-        deleteMatrix(C, data->blockA.endN - data->blockA.startN);
+        deleteMatrix((void**)C, data->blockA.endN - data->blockA.startN);
         delete data;
         param = channel->Recv();
     }
@@ -187,6 +187,7 @@ int** secondMul(LPVOID lpParam){
     for(int i = 0; i < COUNT_THREADS; i++){
         CloseHandle(pThreadArray[i]);
     }
+    delete[] pThreadArray;
     return data->resultMatrix;
 }
 
@@ -219,6 +220,7 @@ int** thirdMul(LPVOID lpParam){
         CloseHandle(pThreadArray[i]);
     }
     CloseHandle(mutex);
+    delete[] pThreadArray;
     return data->resultMatrix;
 }
 
@@ -260,6 +262,8 @@ int** fourMul(LPVOID lpParam){
             CloseHandle(pMutexMatrix[i][j]);
         }
     }
+    delete[] pThreadArray;
+    deleteMatrix((void**)pMutexMatrix, COUNT_THREADS);
     return data->resultMatrix;
 }
 
@@ -286,7 +290,7 @@ int main(){
 //    freopen("output.txt", "w", stdout);
     srand(time(0));
     int n, k, m;
-    std::cin >> n >> k >> m;
+    std::cin >> COUNT_THREADS >> n >> k >> m;
     int** A = createMatrix(n, k);
     fillMatrix(A, n, k);
     int** B = createMatrix(k, m);
@@ -322,11 +326,12 @@ int main(){
     std::cout << "C0, C1 is equals? " << std::boolalpha << isEquals(C0, C1, n, m) << '\n';
     std::cout << "C1, C2 is equals? " << std::boolalpha << isEquals(C1, C2, n, m) << '\n';
     std::cout << "C2, C3 is equals? " << std::boolalpha << isEquals(C2, C3, n, m) << '\n';
-    deleteMatrix(A, n);
-    deleteMatrix(B, k);
-    deleteMatrix(C0, n);
-    deleteMatrix(C1, n);
-    deleteMatrix(C2, n);
-    deleteMatrix(C3, n);
+    delete parameters;
+    deleteMatrix((void**)A, n);
+    deleteMatrix((void**)B, k);
+    deleteMatrix((void**)C0, n);
+    deleteMatrix((void**)C1, n);
+    deleteMatrix((void**)C2, n);
+    deleteMatrix((void**)C3, n);
 
 }
