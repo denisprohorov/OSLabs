@@ -31,11 +31,15 @@ public:
     Block blockA;
     Block blockB;
     int** resultMatrix;
+    void (*writeFncPtr)(MulData*, int**);
 
     MulData() {}
 
-    MulData(const Block &blockA, const Block &blockB, int **resultMatrix) : blockA(blockA), blockB(blockB),
-                                                                            resultMatrix(resultMatrix) {}
+    MulData(const Block &blockA, const Block &blockB, int **resultMatrix) :
+    blockA(blockA), blockB(blockB), resultMatrix(resultMatrix) {}
+
+    MulData(const Block &blockA, const Block &blockB, int **resultMatrix, void (*writeFncPtr)(MulData *, int **))
+            : blockA(blockA), blockB(blockB), resultMatrix(resultMatrix), writeFncPtr(writeFncPtr) {}
 };
 
 class BufferedChannel {
@@ -52,7 +56,7 @@ public:
     }
 
     std::pair<MulData*, bool> Recv() {
-        if(mutex != NULL) WaitForSingleObject(mutex, INFINITE);
+        /*if(mutex != NULL)*/ WaitForSingleObject(mutex, INFINITE);
         if(!this->isOpen || queue.empty()){
             this->Close();
             std::pair<MulData*, bool> pair;
@@ -75,8 +79,9 @@ public:
 struct ThirdData : MulData{
     HANDLE mutex;
 
-    ThirdData(const Block &blockA, const Block &blockB, int **resultMatrix, const void *mutex) :
-    MulData(blockA, blockB, resultMatrix) {mutex = CreateMutex(NULL, FALSE, NULL);}
+    ThirdData(const Block &blockA, const Block &blockB, int **resultMatrix, void (*writeFncPtr)(MulData *, int **),
+              const HANDLE mutex) :
+    MulData(blockA, blockB, resultMatrix, writeFncPtr), mutex(mutex) {}
 
     ThirdData() {}
 };
@@ -135,21 +140,22 @@ int** mul(LPVOID lpParam){
     return C;
 }
 
-DWORD secondMulProc(LPVOID lpParam){
+void writeMatrix(MulData* data, int** matrix){
+    for (int i = 0; i < data->blockA.endN - data->blockA.startN; ++i) {
+        for (int j = 0; j < data->blockB.endM - data->blockB.startM; ++j) {
+            data->resultMatrix[i + data->blockA.startN][j + data->blockB.startM] += matrix[i][j];
+        }
+    }
+}
+
+DWORD threadProc(LPVOID lpParam){
     BufferedChannel* channel = (BufferedChannel*) lpParam;
     std::pair<MulData*, bool> param = channel->Recv();
-    int **matrix;
-    if(param.first != NULL) {
-        matrix = param.first->resultMatrix;
-    }
     while(param.second) {
         MulData* data = param.first;
         int** C = mul((LPVOID) data);
-        for (int i = 0; i < data->blockA.endN - data->blockA.startN; ++i) {
-            for (int j = 0; j < data->blockB.endM - data->blockB.startM; ++j) {
-                matrix[i + data->blockA.startN][j + data->blockB.startM] = C[i][j];
-            }
-        }
+        //write block result
+        data->writeFncPtr(data, C);
         deleteMatrix(C, data->blockA.endN - data->blockA.startN);
         delete data;
         param = channel->Recv();
@@ -168,12 +174,12 @@ int** secondMul(LPVOID lpParam){
                                        data->blockA.startK, data->blockA.endK),
                                 Block(data->blockB.matrix, j * data->blockB.endM / COUNT_THREADS,
                                        (j + 1) * data->blockB.endM / COUNT_THREADS),
-                                       data->resultMatrix));
+                                       data->resultMatrix, writeMatrix));
         }
     }
 
     for (int i = 0; i < COUNT_THREADS; ++i) {
-        pThreadArray[i] = CreateThread(NULL, 0, secondMulProc,
+        pThreadArray[i] = CreateThread(NULL, 0, threadProc,
                                        (LPVOID)&channel, 0, 0);
 
     }
@@ -184,50 +190,75 @@ int** secondMul(LPVOID lpParam){
     return data->resultMatrix;
 }
 
-DWORD thirdMulProc(LPVOID lpParam){
-    BufferedChannel* channel = (BufferedChannel*) lpParam;
-    std::pair<MulData*, bool> param = channel->Recv();
-    int **matrix;
-    if(param.first != NULL) {
-        matrix = param.first->resultMatrix;
-    }
-    while(param.second) {
-        ThirdData* data = (ThirdData*) param.first;
-        int** C = mul((LPVOID) data);
-        if (data->mutex != NULL) WaitForSingleObject(data->mutex, INFINITE);
-        for (int i = 0; i < data->blockA.endN; ++i) {
-            for (int j = 0; j < data->blockB.endM; ++j) {
-                matrix[i][j] += C[i][j];
-            }
-        }
-        ReleaseMutex(data->mutex);
-        deleteMatrix(C, data->blockA.endN);
-        delete data;
-        param = channel->Recv();
-    }
-    return 0;
+void writeMatrixUsingMutex(MulData* data, int** matrix){
+    ThirdData* thirdData = (ThirdData*) data;
+    if(thirdData->mutex != NULL) WaitForSingleObject(thirdData->mutex, INFINITE);
+    writeMatrix(data, matrix);
+    ReleaseMutex(thirdData->mutex);
 }
 
 int** thirdMul(LPVOID lpParam){
     BufferedChannel channel;
     MulData* data = (MulData*) lpParam;
-    HANDLE mutex = CreateMutex(NULL, FALSE, NULL);
+    HANDLE mutex = CreateMutex(NULL, FALSE, "mutex");
     auto pThreadArray = new HANDLE[COUNT_THREADS];
     for (int i = 0; i < COUNT_THREADS; ++i) {
         channel.Send(new ThirdData(Block(data->blockA.matrix, data->blockA.startN, data->blockA.endN,
                                          i * data->blockA.endK / COUNT_THREADS,
                                          (i + 1) * data->blockA.endK / COUNT_THREADS),
                                    Block(data->blockB.matrix, data->blockB.startM, data->blockB.endM),
-                                   data->resultMatrix, &mutex));
+                                   data->resultMatrix, writeMatrixUsingMutex, mutex));
     }
     for (int i = 0; i < COUNT_THREADS; ++i) {
-                pThreadArray[i] = CreateThread(NULL, 0, thirdMulProc,
+                pThreadArray[i] = CreateThread(NULL, 0, threadProc,
                                        (LPVOID) &channel, 0, 0);
 
     }
     WaitForMultipleObjects(COUNT_THREADS, pThreadArray, TRUE, INFINITE);
     for(int i = 0; i < COUNT_THREADS; i++){
         CloseHandle(pThreadArray[i]);
+    }
+    CloseHandle(mutex);
+    return data->resultMatrix;
+}
+
+int** fourMul(LPVOID lpParam){
+    BufferedChannel channel;
+    MulData* data = (MulData*) lpParam;
+    auto pThreadArray = new HANDLE[COUNT_THREADS];
+    auto pMutexMatrix = new HANDLE*[COUNT_THREADS];
+    for (int i = 0; i < COUNT_THREADS; ++i) {
+        pMutexMatrix[i] = new HANDLE[COUNT_THREADS];
+        for (int j = 0; j < COUNT_THREADS; ++j) {
+            pMutexMatrix[i][j] = CreateMutex(NULL, FALSE, NULL);
+        }
+    }
+    for (int i = 0; i < COUNT_THREADS; ++i) {
+            for (int k = 0; k < COUNT_THREADS; ++k) {
+        for (int j = 0; j < COUNT_THREADS; ++j) {
+                channel.Send(new ThirdData(Block(data->blockA.matrix,
+                                                 i * data->blockA.endN / COUNT_THREADS,
+                                                 (i + 1) * data->blockA.endN / COUNT_THREADS,
+                                                 k * data->blockA.endK / COUNT_THREADS,
+                                                 (k + 1) * data->blockA.endK / COUNT_THREADS),
+                                           Block(data->blockB.matrix,
+                                                 j * data->blockB.endM / COUNT_THREADS,
+                                                 (j + 1) * data->blockB.endM / COUNT_THREADS),
+                                           data->resultMatrix, writeMatrixUsingMutex, pMutexMatrix[i][j]));
+            }
+        }
+    }
+    for (int i = 0; i < COUNT_THREADS; ++i) {
+                pThreadArray[i] = CreateThread(NULL, 0, threadProc,
+                                       (LPVOID) &channel, 0, 0);
+
+    }
+    WaitForMultipleObjects(COUNT_THREADS, pThreadArray, TRUE, INFINITE);
+    for(int i = 0; i < COUNT_THREADS; i++){
+        CloseHandle(pThreadArray[i]);
+        for (int j = 0; j < COUNT_THREADS; ++j) {
+            CloseHandle(pMutexMatrix[i][j]);
+        }
     }
     return data->resultMatrix;
 }
@@ -251,8 +282,6 @@ void printMatrix(int** A, int n, int m){
 
 
 int main(){
-//    std::ios_base::sync_with_stdio(false);
-//    std::cin.tie(nullptr);
     freopen("input.txt", "r", stdin);
 //    freopen("output.txt", "w", stdout);
     srand(time(0));
@@ -275,18 +304,29 @@ int main(){
     parameters->resultMatrix = C2;
     int time2 = callMul(thirdMul, parameters, C2);
 
+    int** C3 = createMatrix(n, m);
+    parameters->resultMatrix = C3;
+    int time3 = callMul(fourMul, parameters, C3);
+
 //    printMatrix(A, n, k);
 //    printMatrix(B, k, m);
 //    printMatrix(C0, n, m);
 //    printMatrix(C1, n, m);
 //    printMatrix(C2, n, m);
+//    printMatrix(C3, n, m);
 
-    std::cout << "mul0 : " << time0 << '\n';
-    std::cout << "mul1 : " << time1 << '\n';
-    std::cout << "mul2 : " << time2 << '\n';
-    std::cout << std::boolalpha << (isEquals(C0, C1, n, m) && isEquals(C1, C2, n, m)) << '\n';
+    std::cout << "mul0 : " << time0 << "ms" << '\n';
+    std::cout << "mul1 : " << time1 << "ms" << '\n';
+    std::cout << "mul2 : " << time2 << "ms" << '\n';
+    std::cout << "mul3 : " << time3 << "ms" << '\n';
+    std::cout << "C0, C1 is equals? " << std::boolalpha << isEquals(C0, C1, n, m) << '\n';
+    std::cout << "C1, C2 is equals? " << std::boolalpha << isEquals(C1, C2, n, m) << '\n';
+    std::cout << "C2, C3 is equals? " << std::boolalpha << isEquals(C2, C3, n, m) << '\n';
     deleteMatrix(A, n);
     deleteMatrix(B, k);
     deleteMatrix(C0, n);
+    deleteMatrix(C1, n);
+    deleteMatrix(C2, n);
+    deleteMatrix(C3, n);
 
 }
