@@ -1,7 +1,7 @@
 #include <iostream>
 #include <ctime>
 #include <chrono>
-#include <windows.h>
+#include <pthread.h>
 #include <queue>
 #include <mutex>
 #include <condition_variable>
