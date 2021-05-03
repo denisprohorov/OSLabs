@@ -1,95 +1,95 @@
 #include <iostream>
-#include <windows.h>
-#include <TlHelp32.h>
-#include <iomanip>
-#include <string>
+#include <signal.h>
+#include <dirent.h>
+#include <cstring>
+#include <functional>
+#include <unistd.h>
 #include <sstream>
 
-//void printAllProcess(){
-//    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-//    PROCESSENTRY32 pe = { 0 };
-//    pe.dwSize = sizeof(PROCESSENTRY32);
-//
-//    Process32First(hSnap, &pe);
-//
-//    do
-//    {
-//        std::cout << std::setw(30) << pe.szExeFile<< std::setw(10) << pe.th32ProcessID << std::setw(10) << pe.cntThreads << "\n";
-//    }while (Process32Next(hSnap, &pe));
-//    CloseHandle(hSnap);
-//}
+const int BUFFER_SIZE = 260;
 
-bool isExist(char* cmpValue, bool (*cmpPtr)(PROCESSENTRY32&, char*)){
-    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    PROCESSENTRY32 pe = { 0 };
-    pe.dwSize = sizeof(PROCESSENTRY32);
+bool ForEachProc(const std::function<bool(char *, int)> &Do);
 
-    Process32First(hSnap, &pe);
-    do
-    {
-        if(cmpPtr(pe, cmpValue)){
-            CloseHandle(hSnap);
-            return true;
+bool IsExistByName(char *cmpValue) {
+    std::cout << "proc with name " << cmpValue << " is Exist? " << std::boolalpha << ForEachProc(
+            [&](char *name, int pid) {
+                if (strcmp(name, cmpValue) == 0) {
+                    return true;
+                }
+                return false;
+            }) << '\n';
+}
+
+bool IsExistById(pid_t id) {
+    std::cout << "proc with id " << id << " is Exist? " << std::boolalpha << (kill(id, SIGCONT) == 0) << '\n';
+}
+
+bool ForEachProc(const std::function<bool(char *, int)> &Do) {
+    FILE *file;
+    dirent *entry;
+    char path[BUFFER_SIZE];
+    int pid;
+
+    DIR *dir = opendir("/proc");
+    bool made = false;
+    while ((entry = readdir(dir)) && !made) {
+        if (!isdigit(entry->d_name[0])) {
+            continue;
         }
-    }while (Process32Next(hSnap, &pe));
-    CloseHandle(hSnap);
-    return false;
-}
 
-void DeleteProcess(char* cmpValue, bool (*cmpPtr)(PROCESSENTRY32&, char*)){
-    std::cout << "process " << cmpValue  << " before delete isExist? " <<
-    std::boolalpha << isExist(cmpValue, cmpPtr) << '\n';
-    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    PROCESSENTRY32 pe = { 0 };
-    pe.dwSize = sizeof(PROCESSENTRY32);
+        sprintf(path, "/proc/%s/stat", entry->d_name);
+        file = fopen(path, "r");
 
-    HANDLE process;
-    Process32First(hSnap, &pe);
-    do
-    {
-        if(cmpPtr(pe, cmpValue)){
-//            std::cout << pe.szExeFile;
-            process = OpenProcess(PROCESS_ALL_ACCESS, TRUE, pe.th32ProcessID);
-            TerminateProcess(process, 0);
-            WaitForSingleObject(process, INFINITE);// need time to delete
-            CloseHandle(process);
+        if (!file) {
+            perror(path);
+            continue;
         }
-    }while (Process32Next(hSnap, &pe));
-    CloseHandle(hSnap);
-    std::cout << "process " << cmpValue  << " after party isExist? " <<
-    std::boolalpha << isExist(cmpValue, cmpPtr) << '\n';
+
+        fscanf(file, "%d %s", &pid, &path);
+        auto name = new char[BUFFER_SIZE];
+        strcpy(name, path + 1);
+        name[strlen(path) - 2] = '\0';
+
+        made = Do(name, pid);
+
+        fclose(file);
+    }
+    closedir(dir);
+    return made;
 }
 
-bool cmpByName(PROCESSENTRY32& pe, char* name){
-    return (strcmp(pe.szExeFile, name) == 0);
-}
-
-bool cmpById(PROCESSENTRY32& pe, char* id){
-    std::stringstream ss;
-    ss << pe.th32ProcessID;
-    return (strcmp(ss.str().c_str(), id) == 0);
-}
-
-int main(int argc, char *argv[]){
-    GetCommandLineA();
-
-    if(argc >= 3){
-        if(strcmp(argv[1], "--name") == 0){
-            DeleteProcess(argv[2], cmpByName);
+void KillByName(char nameCmp[]) {
+    IsExistByName(nameCmp);
+    ForEachProc([&](char *name, int pid) {
+        if (strcmp(name, nameCmp) == 0) {
+            kill(pid, SIGTERM);
         }
-        if(strcmp(argv[1], "--id") == 0){
-            DeleteProcess(argv[2], cmpById);
+        return false;
+    });
+    sleep(1);
+    IsExistByName(nameCmp);
+}
+
+int main(int argc, char *argv[]) {
+    const char *name = "PROC_TO_KILL";
+    char* buffer = getenv(name);
+    if(buffer) {
+        std::stringstream ss(buffer);
+        while (ss.getline(buffer, 256, ',')) {
+            KillByName(buffer);
         }
     }
-    const CHAR *name = "PROC_TO_KILL";
-    const DWORD buffSize = 65535;
-    char buffer[buffSize];
-    GetEnvironmentVariableA(name, buffer, buffSize);
-    std::stringstream ss(buffer);
-    while(ss.getline(reinterpret_cast<char *>(&buffer), buffSize, ',')){
-        DeleteProcess(buffer, cmpByName);
+    if (argc >= 3) {
+        if (strcmp(argv[1], "--name") == 0) {
+            KillByName(argv[2]);
+        }else if (strcmp(argv[1], "--id") == 0) {
+            int id = atoi(argv[2]);
+            IsExistById(id);
+            kill(id, SIGTERM);
+            sleep(1);
+            IsExistById(id);
+        }
     }
-
     return 0;
 }
 
